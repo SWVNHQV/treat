@@ -11,7 +11,7 @@ import streamlit as st
 
 
 # ---------------------------------------------------------------------------
-# Secrets / VW Group LLMaaS
+# Secrets / OpenAI API
 # ---------------------------------------------------------------------------
 
 def _secret(name: str, default=None):
@@ -25,82 +25,35 @@ def _secret(name: str, default=None):
     return os.getenv(name, default)
 
 
-VW_TOKEN_URL = "https://idp.cloud.vwgroup.com/auth/realms/kums-mfa/protocol/openid-connect/token"
-
-
 def enabled() -> bool:
-    """Return True when the verified VW Group LLMaaS credentials are available."""
-    return all(
-        _secret(name)
-        for name in (
-            "VW_IDP_CLIENT_ID",
-            "VW_IDP_CLIENT_SECRET",
-            "LLM_API_CLIENT_ID",
-        )
-    )
-
-
-def get_token() -> str:
-    """Get the temporary VW Group IDP access token."""
-    client_id = _secret("VW_IDP_CLIENT_ID")
-    client_secret = _secret("VW_IDP_CLIENT_SECRET")
-
-    if not client_id or not client_secret:
-        raise RuntimeError(
-            "VW Group IDP credentials are missing. Configure "
-            "VW_IDP_CLIENT_ID and VW_IDP_CLIENT_SECRET in Streamlit Secrets."
-        )
-
-    response = httpx.post(
-        VW_TOKEN_URL,
-        data={
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "grant_type": "client_credentials",
-        },
-        timeout=30.0,
-    )
-    response.raise_for_status()
-    token = response.json().get("access_token")
-    if not token:
-        raise RuntimeError("VW Group IDP did not return an access token.")
-    return token
+    """Return True when an OpenAI API key is configured."""
+    return bool(_secret("OPENAI_API_KEY"))
 
 
 def _client():
-    """Create the OpenAI-compatible VW Group LLMaaS client."""
+    """Create the standard OpenAI API client."""
     from openai import OpenAI
 
-    if not enabled():
-        raise RuntimeError("VW Group LLMaaS credentials are not configured.")
-
-    token = get_token()
-    key = _secret("LLM_API_CLIENT_ID")
-    base_url = _secret("LLM_API_BASE_URL", "https://llmapi.ai.vwgroup.com")
-
-    return OpenAI(
-        api_key=token,
-        base_url=base_url,
-        default_headers={"X-LLM-API-CLIENT-ID": f"Bearer {key}"},
-    )
+    api_key = _secret("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "OpenAI API key is missing. Configure OPENAI_API_KEY in "
+            "Streamlit Secrets or the environment."
+        )
+    # No custom base_url: use the standard OpenAI API endpoint.
+    return OpenAI(api_key=api_key)
 
 
 def _chat(prompt: str, model: str | None = None, temperature: float = 0.0) -> str:
-    """Call the verified VW Group chat-completions endpoint."""
+    """Call the standard OpenAI Chat Completions API."""
     model = model or _secret("OPENAI_MODEL", "gpt-4o")
     client = _client()
 
     response = client.chat.completions.create(
         model=model,
         messages=[
-            {
-                "role": "system",
-                "content": SYSTEM_PROMPT,
-            },
-            {
-                "role": "user",
-                "content": prompt,
-            },
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
         ],
         stream=False,
         temperature=temperature,
@@ -415,7 +368,7 @@ def generate_root_cause(case: dict, model: str | None = None) -> str:
     """Generate one AI-only RCA brief from the selected correlated case."""
     if not enabled():
         raise RuntimeError(
-            "VW Group LLMaaS is not configured. RCA generation requires the live LLM."
+            "OPENAI_API_KEY is not configured. RCA generation requires the live LLM."
         )
 
     prompt = f"""
@@ -449,7 +402,7 @@ def explain_finding(context: dict, model: str | None = None) -> str:
     """Explain exactly one selected DQ/anomaly finding and nothing else."""
     if not enabled():
         raise RuntimeError(
-            "VW Group LLMaaS is not configured. Finding explanation requires the live LLM."
+            "OPENAI_API_KEY is not configured. Finding explanation requires the live LLM."
         )
 
     selected = context.get("selected_finding", context.get("finding", context))
@@ -514,7 +467,7 @@ def copilot_workbook_answer(question: str, dq, anomalies, data, model: str | Non
     Every general question follows the same path:
     1. Safely answer common numeric/status questions directly from the workbook.
     2. Otherwise send the operator question + the COMPLETE six-sheet workbook to the
-       VW Group LLMaaS model.
+       OpenAI API model.
     Exact DQ/AN explanations are handled separately by explain_finding().
     """
     import pandas as pd
@@ -560,9 +513,9 @@ def copilot_workbook_answer(question: str, dq, anomalies, data, model: str | Non
         # misleading selected-finding answer.
         return (
             "### Answer\n"
-            "The complete workbook is loaded, but the VW Group LLMaaS connection "
+            "The complete workbook is loaded, but the OpenAI API connection "
             "is not available for this natural-language question. "
-            "Configure the VW Group LLMaaS Secrets to enable general Copilot answers."
+            "Configure the OpenAI API Secrets to enable general Copilot answers."
         )
 
     context = {
@@ -628,12 +581,12 @@ def fallback_root_cause(case):
         "### Recommended Action\n"
         f"{case.get('recommended_action', 'Review the linked records and correct the underlying issue.')}\n\n"
         "### Confidence\n"
-        "This fallback is only a compatibility function; live RCA generation requires VW Group LLMaaS."
+        "This fallback is only a compatibility function; live RCA generation requires the OpenAI API."
     )
 
 
 def fallback_copilot(question, case):
     return (
         "### Answer\n"
-        "Live Copilot generation is unavailable. Please configure the VW Group LLMaaS credentials."
+        "Live Copilot generation is unavailable. Please configure the OpenAI API credentials."
     )
